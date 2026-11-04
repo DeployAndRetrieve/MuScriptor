@@ -72,15 +72,22 @@ locally. The app does not download the file itself and never sends the MP3 anywh
 ### Build and install the Android app
 
 Use Android Studio: **Open** the `MuScriptorScore/` folder and build/install `app`.
-Alternatively, from a Gradle 8.13 installation:
+Alternatively, from the project root in PowerShell:
 
 ```powershell
-gradle.bat --no-daemon :app:assembleDebug
+.\gradlew.bat --no-daemon :app:assembleDebug
 ```
 
-The project deliberately **does not contain an unverified Gradle Wrapper JAR**. Generate/obtain it
-from a trusted Gradle distribution and verify its official SHA-256 checksum before reuse. The APK
-appears in `app/build/outputs/apk/debug/` when the Android build succeeds.
+The project contains Gradle Wrapper **8.13** (`gradlew`, `gradlew.bat`,
+`gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties`).
+The Wrapper JAR was obtained from the official Gradle `v8.13.0` tag and verified against
+the published SHA-256
+`81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f`.
+The distribution ZIP checksum is pinned to
+`20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78`.
+The first build downloads Gradle and Android build dependencies; offline operation refers to
+**on-device music transcription after setup**, not the development build.
+The APK appears in `app/build/outputs/apk/debug/` when the Android build succeeds.
 
 ## App workflow
 
