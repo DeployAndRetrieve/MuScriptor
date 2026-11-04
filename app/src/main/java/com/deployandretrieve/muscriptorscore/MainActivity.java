@@ -27,7 +27,6 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -256,7 +255,7 @@ public final class MainActivity extends Activity {
         "モデル: CC BY-NC 4.0（非商用）\nMuScriptorソース: MIT\naudio.cpp: Apache 2.0\n"+
         "楽譜表示は簡易プレビュー、MusicXML出力は4/4固定です。\n\n"+
         "開発: DEPLOY & RETRIEVE";
-        new AlertDialog.Builder(this).setTitle("MuScriptor Score v1.0").setMessage(info)
+        new AlertDialog.Builder(this).setTitle("MuScriptor Score v" + BuildConfig.VERSION_NAME).setMessage(info)
             .setPositiveButton("閉じる",null).show();
     }
     private void saveAs(String type){
@@ -289,7 +288,9 @@ public final class MainActivity extends Activity {
     }
     private void saveProject(){
         try{
-            Files.writeString(new File(getFilesDir(),"project.json").toPath(),TranscriptionParser.serialize(notes),StandardCharsets.UTF_8);
+            try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), "project.json"))) {
+                out.write(TranscriptionParser.serialize(notes).getBytes(StandardCharsets.UTF_8));
+            }
             getPreferences(0).edit().putInt("bpm",bpm).apply();
         }catch(Exception e){message("編集結果を保存できませんでした: "+e.getMessage());}
     }
@@ -299,7 +300,18 @@ public final class MainActivity extends Activity {
         String previous=getPreferences(0).getString("audio",null);
         if(previous!=null)try{audioUri=Uri.parse(previous);}catch(Exception ignored){}
         File file=new File(getFilesDir(),"project.json");
-        if(file.isFile())try{notes.addAll(TranscriptionParser.deserialize(Files.readString(file.toPath())));}catch(Exception ignored){}
+        if (file.isFile()) {
+            try (InputStream in = new java.io.FileInputStream(file);
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, count);
+                }
+                notes.addAll(TranscriptionParser.deserialize(
+                    new String(out.toByteArray(), StandardCharsets.UTF_8)));
+            } catch (Exception ignored) {}
+        }
     }
     @Override protected void onDestroy(){jobs.shutdown();super.onDestroy();}
 }
