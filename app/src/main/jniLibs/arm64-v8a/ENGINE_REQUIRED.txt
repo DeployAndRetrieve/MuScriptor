@@ -1,0 +1,2 @@
+Place the ARM64 Android build of libaudiocpp.so here with scripts/Prepare-Native.ps1.
+This is NOT included until the third-party native build has succeeded.

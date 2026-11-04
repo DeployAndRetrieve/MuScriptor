@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22)
+project(muscriptorscore_bridge LANGUAGES CXX)
+add_library(muscriptorscore_bridge SHARED muscriptor_jni.cpp)
+target_compile_features(muscriptorscore_bridge PRIVATE cxx_std_17)
+target_link_libraries(muscriptorscore_bridge PRIVATE log dl)

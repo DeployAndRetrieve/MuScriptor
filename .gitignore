@@ -1,0 +1,11 @@
+.gradle/
+build/
+**/build/
+.idea/
+local.properties
+.cxx/
+app/src/main/jniLibs/**/*.so
+native-build/
+third_party/
+*.gguf
+*.safetensors
