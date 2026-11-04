@@ -19,6 +19,7 @@ import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import java.io.ByteArrayOutputStream;
@@ -55,14 +56,41 @@ public final class MainActivity extends Activity {
     private int bpm=120,page=0;
     private String filter=null,exportKind;
     private boolean working=false;
+    private ComparisonPlayback comparison;
+    private Button comparePlayButton, compareStopButton, originalMuteButton, midiMuteButton;
+    private SeekBar compareSeekBar, originalVolumeSeek, midiVolumeSeek;
+    private TextView compareTime, compareStatus, originalVolumeLabel, midiVolumeLabel;
+    private boolean seekingComparison=false;
+    private boolean originalMuted=false, midiMuted=false;
+    private int originalVolume=100, midiVolume=100;
+    private final Runnable compareTicker=new Runnable(){
+        @Override public void run(){
+            if(comparison!=null){
+                comparison.correctDrift();
+                updateComparisonUi();
+            }
+            ui.postDelayed(this,250);
+        }
+    };
 
     @Override public void onCreate(Bundle savedInstance){
         super.onCreate(savedInstance);
         setTitle("MuScriptor Score");
         modelFile=new File(getFilesDir(),"models/muscriptor-small-f32.gguf");
+        comparison=new ComparisonPlayback(this,new ComparisonPlayback.Listener(){
+            @Override public void onChanged(){updateComparisonUi();}
+            @Override public void onError(String description){
+                updateComparisonUi();
+                message(description);
+            }
+        });
+        originalVolume=getPreferences(0).getInt("original_volume",100);
+        midiVolume=getPreferences(0).getInt("midi_volume",100);
         loadProject();
         buildUi();
         refresh();
+        applyComparisonVolumes();
+        ui.postDelayed(compareTicker,250);
     }
     private int dp(float amount){return (int)(getResources().getDisplayMetrics().density*amount+.5f);}
     private TextView text(String value,int size){
@@ -97,10 +125,16 @@ public final class MainActivity extends Activity {
             public void onNothingSelected(android.widget.AdapterView<?> parent){}
             public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){
                 List<String> keys=availableParts();
-                filter=position==0?null:keys.get(position-1);
+                if(position>keys.size())return;
+                String selected=position==0?null:keys.get(position-1);
+                if(!java.util.Objects.equals(filter,selected)){
+                    filter=selected;
+                    comparison.reset();
+                }
                 redrawScore();redrawList();
             }
         });
+        buildComparisonUi(root);
         LinearLayout pages=row(root);
         prevButton=button("◀ 前の4小節",()->{page=Math.max(0,page-1);redrawScore();});
         nextButton=button("次の4小節 ▶",()->{page++;redrawScore();});
@@ -131,6 +165,7 @@ public final class MainActivity extends Activity {
         if(result!=RESULT_OK||intent==null||intent.getData()==null)return;
         Uri uri=intent.getData();
         if(request==PICK_MP3){
+            comparison.reset();
             audioUri=uri;audioName=fileName(uri);
             notes.clear();page=0;filter=null;saveProject();
             try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
@@ -183,6 +218,7 @@ public final class MainActivity extends Activity {
                 List<NoteEvent> recognized=TranscriptionParser.parse(json);
                 if(recognized.isEmpty())throw new IllegalStateException("音符が検出されませんでした");
                 ui.post(()->{
+                    comparison.reset();
                     notes.clear();notes.addAll(recognized);page=0;filter=null;
                     saveProject();refresh();message(notes.size()+"音符を検出しました");
                 });
@@ -202,10 +238,15 @@ public final class MainActivity extends Activity {
         if(!working)updateBusy("エンジン: "+engine);
         Set<String> partSet=new LinkedHashSet<>();for(NoteEvent n:notes)partSet.add(n.instrument);
         summary.setText("検出: "+notes.size()+"音符 / "+partSet.size()+"パート   |   BPM "+bpm+"・4/4（手動設定）");
+        List<String> keys=new ArrayList<>(partSet);
         List<String> opts=new ArrayList<>();opts.add("全パート");
-        for(String name:partSet)opts.add(Instruments.display(name));
+        for(String name:keys)opts.add(Instruments.display(name));
+        int selectedPart=filter==null?0:keys.indexOf(filter)+1;
+        if(selectedPart<0){filter=null;selectedPart=0;}
         partSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,opts));
+        partSpinner.setSelection(selectedPart);
         redrawScore();redrawList();
+        updateComparisonUi();
     }
     private List<String> availableParts(){
         Set<String> set=new LinkedHashSet<>();for(NoteEvent n:notes)set.add(n.instrument);return new ArrayList<>(set);
@@ -226,7 +267,7 @@ public final class MainActivity extends Activity {
          .setPositiveButton("適用",(d,w)->{
              try{int value=Integer.parseInt(input.getText().toString());
                  if(value<20||value>300)throw new NumberFormatException();
-                 bpm=value;saveProject();refresh();
+                 bpm=value;comparison.reset();saveProject();refresh();
              }catch(NumberFormatException e){message("BPMは20〜300で指定してください");}
          }).setNegativeButton("取消",null).show();
     }
@@ -246,19 +287,161 @@ public final class MainActivity extends Activity {
                   double b=Double.parseDouble(end.getText().toString());
                   if(p<0||p>127||a<0||!Double.isFinite(a)||!Double.isFinite(b)||b<=a)throw new IllegalArgumentException();
                   n.pitch=p;n.startSeconds=a;n.endSeconds=b;notes.sort(Comparator.comparingDouble(x->x.startSeconds));
-                  saveProject();refresh();
+                  comparison.reset();saveProject();refresh();
               }catch(Exception e){message("入力値が不正です");}
-          }).setNeutralButton("削除",(d,w)->{notes.remove(n);saveProject();refresh();})
+          }).setNeutralButton("削除",(d,w)->{notes.remove(n);comparison.reset();saveProject();refresh();})
           .setNegativeButton("取消",null).show();
     }
     private void settings(){
-        String info="MuScriptor Score v1.0\n\n完全オフライン動作。MP3は外部送信されません。\n\n推論: MuScriptor Small / audio.cpp C API (CPU)\n"+
+        String info="MuScriptor Score v"+BuildConfig.VERSION_NAME+"\n\n完全オフライン動作。MP3は外部送信されません。\n\n推論: MuScriptor Small / audio.cpp C API (CPU)\n"+
         "モデル: CC BY-NC 4.0（非商用）\nMuScriptorソース: MIT\naudio.cpp: Apache 2.0\n"+
         "楽譜表示は簡易プレビュー、MusicXML出力は4/4固定です。\n\n"+
         "開発: DEPLOY & RETRIEVE";
         new AlertDialog.Builder(this).setTitle("MuScriptor Score v" + BuildConfig.VERSION_NAME).setMessage(info)
             .setPositiveButton("閉じる",null).show();
     }
+
+    /** Original/MIDI simultaneous playback, with independent gain and mute. */
+    private void buildComparisonUi(LinearLayout root){
+        root.addView(text("原盤 ↔ MIDI 聴き比べ（現在選択中のパートを再生）",15));
+
+        LinearLayout controls=row(root);
+        comparePlayButton=button("▶ 同時再生",this::toggleComparisonPlayback);
+        compareStopButton=button("■ 停止",()->{
+            if(comparison!=null){
+                comparison.pause();
+                comparison.seekTo(0);
+                updateComparisonUi();
+            }
+        });
+        put(controls,comparePlayButton);
+        put(controls,compareStopButton);
+
+        compareTime=text("00:00 / 00:00",13);
+        root.addView(compareTime);
+        compareSeekBar=new SeekBar(this);
+        compareSeekBar.setMax(1);
+        compareSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onStartTrackingTouch(SeekBar bar){seekingComparison=true;}
+            @Override public void onProgressChanged(SeekBar bar,int value,boolean fromUser){
+                if(fromUser)compareTime.setText(formatClock(value)+" / "+formatClock(comparison.getDurationMs()));
+            }
+            @Override public void onStopTrackingTouch(SeekBar bar){
+                seekingComparison=false;
+                comparison.seekTo(bar.getProgress());
+                updateComparisonUi();
+            }
+        });
+        root.addView(compareSeekBar);
+
+        LinearLayout originalRow=row(root);
+        originalVolumeLabel=text("原盤 100%",13);
+        originalRow.addView(originalVolumeLabel,new LinearLayout.LayoutParams(0,dp(48),1));
+        originalMuteButton=button("原盤を消音",()->{
+            originalMuted=!originalMuted;
+            applyComparisonVolumes();
+        });
+        originalRow.addView(originalMuteButton,new LinearLayout.LayoutParams(dp(144),dp(48)));
+        originalVolumeSeek=new SeekBar(this);originalVolumeSeek.setMax(100);originalVolumeSeek.setProgress(originalVolume);
+        originalVolumeSeek.setOnSeekBarChangeListener(new GainChangeListener(true));
+        root.addView(originalVolumeSeek);
+
+        LinearLayout midiRow=row(root);
+        midiVolumeLabel=text("MIDI 100%",13);
+        midiRow.addView(midiVolumeLabel,new LinearLayout.LayoutParams(0,dp(48),1));
+        midiMuteButton=button("MIDIを消音",()->{
+            midiMuted=!midiMuted;
+            applyComparisonVolumes();
+        });
+        midiRow.addView(midiMuteButton,new LinearLayout.LayoutParams(dp(144),dp(48)));
+        midiVolumeSeek=new SeekBar(this);midiVolumeSeek.setMax(100);midiVolumeSeek.setProgress(midiVolume);
+        midiVolumeSeek.setOnSeekBarChangeListener(new GainChangeListener(false));
+        root.addView(midiVolumeSeek);
+
+        compareStatus=text("採譜完了後に聴き比べできます。",12);
+        root.addView(compareStatus);
+    }
+
+    private final class GainChangeListener implements SeekBar.OnSeekBarChangeListener {
+        private final boolean forOriginal;
+        GainChangeListener(boolean forOriginal){this.forOriginal=forOriginal;}
+        @Override public void onStartTrackingTouch(SeekBar bar){}
+        @Override public void onProgressChanged(SeekBar bar,int value,boolean fromUser){
+            if(!fromUser)return;
+            if(forOriginal)originalVolume=value;
+            else midiVolume=value;
+            applyComparisonVolumes();
+        }
+        @Override public void onStopTrackingTouch(SeekBar bar){
+            getPreferences(0).edit().putInt("original_volume",originalVolume)
+                    .putInt("midi_volume",midiVolume).apply();
+        }
+    }
+
+    private void applyComparisonVolumes(){
+        if(comparison==null)return;
+        comparison.setVolumes(originalMuted?0f:originalVolume/100f,
+                              midiMuted?0f:midiVolume/100f);
+        updateComparisonUi();
+    }
+
+    private void toggleComparisonPlayback(){
+        if(audioUri==null){message("原盤となる音声を選択してください");return;}
+        List<NoteEvent> selected=visibleNotes();
+        if(selected.isEmpty()){message("比較するMIDI音符がありません");return;}
+        try{
+            if(!comparison.hasSource()){
+                comparison.loadAndPlay(audioUri,selected,bpm);
+            }else if(comparison.isPlaying()){
+                comparison.pause();
+            }else{
+                comparison.play();
+            }
+        }catch(Exception e){
+            message("聴き比べの準備に失敗: "+e.getMessage());
+        }
+        updateComparisonUi();
+    }
+
+    private static String formatClock(int milliseconds){
+        int seconds=Math.max(0,milliseconds)/1000;
+        return String.format(Locale.US,"%02d:%02d",seconds/60,seconds%60);
+    }
+
+    private void updateComparisonUi(){
+        if(comparison==null || comparePlayButton==null)return;
+        boolean ready=comparison.isReady();
+        boolean loading=comparison.isPreparing();
+        comparePlayButton.setText(loading?"読み込み中…":comparison.isPlaying()?"Ⅱ 一時停止":"▶ 同時再生");
+        comparePlayButton.setEnabled(!loading && audioUri!=null && !notes.isEmpty());
+        compareStopButton.setEnabled(comparison.hasSource());
+        int duration=comparison.getDurationMs();
+        if(compareSeekBar!=null){
+            compareSeekBar.setMax(Math.max(1,duration));
+            compareSeekBar.setEnabled(ready);
+            if(!seekingComparison)compareSeekBar.setProgress(comparison.getPositionMs());
+        }
+        if(!seekingComparison && compareTime!=null){
+            compareTime.setText(formatClock(comparison.getPositionMs())+" / "+formatClock(duration));
+        }
+        if(originalVolumeLabel!=null){
+            originalVolumeLabel.setText("原盤 "+originalVolume+"%"+(originalMuted?"（消音）":""));
+            originalMuteButton.setText(originalMuted?"原盤の消音解除":"原盤を消音");
+        }
+        if(midiVolumeLabel!=null){
+            midiVolumeLabel.setText("MIDI "+midiVolume+"%"+(midiMuted?"（消音）":""));
+            midiMuteButton.setText(midiMuted?"MIDIの消音解除":"MIDIを消音");
+        }
+        if(compareStatus!=null){
+            String detail=loading?"原盤とMIDIの再生準備中":
+                          comparison.isPlaying()?"同時再生中（簡易同期）":
+                          ready?"一時停止中／共通シーク可能":
+                          notes.isEmpty()?"採譜完了後に聴き比べできます。":
+                          "現在表示中の楽器パートをMIDIにして再生します。";
+            compareStatus.setText(detail);
+        }
+    }
+
     private void saveAs(String type){
         if(notes.isEmpty()){message("採譜データがありません");return;}
         exportKind=type;
@@ -314,5 +497,14 @@ public final class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }
     }
-    @Override protected void onDestroy(){jobs.shutdown();super.onDestroy();}
+    @Override protected void onPause(){
+        if(comparison!=null)comparison.pause();
+        super.onPause();
+    }
+    @Override protected void onDestroy(){
+        ui.removeCallbacks(compareTicker);
+        if(comparison!=null)comparison.reset();
+        jobs.shutdown();
+        super.onDestroy();
+    }
 }

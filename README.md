@@ -1,4 +1,4 @@
-# MuScriptor Score v1.0 (Android, private non-commercial project)
+# MuScriptor Score v1.1.0 (Android, private non-commercial project)
 
 An **offline-only** Android music-to-sheet application based on MuScriptor Small.
 
@@ -17,6 +17,14 @@ an APK whose UI works but whose AI transcription cannot run.
 - `audio.cpp` implements actual MuScriptor Small inference with ggml, CPU backend (no Python, no API)
 - `.gguf` Small model, copied by user into private app storage through Android Storage Access Framework
 - MuScriptor event stream (`start` / `end`) -> note list -> basic preview / MIDI / MusicXML
+- **Offline A/B playback:** the selected MP3/original audio and the generated MIDI start together.
+  Both streams share play/pause/seek controls, but have independent 0–100% gain sliders and
+  one-touch mute toggles. The MIDI preview uses the currently selected instrument part
+  (or all parts), and is regenerated from edited notes when playback is reopened.
+  MIDI playback uses Android's built-in Standard MIDI File Type 1 support rather than an
+  external server or bundled soundfont. Since two MediaPlayers are used, synchronization
+  is best-effort (periodic drift correction), **not sample accurate**. Device-specific
+  synthesizer timbre and MIDI start latency may differ. No user soundfont selection yet.
 - **No `android.permission.INTERNET` in AndroidManifest.xml**
 
 No analysis server is used. The preparation/build steps use a development computer and the internet
@@ -95,7 +103,12 @@ The APK appears in `app/build/outputs/apk/debug/` when the Android build succeed
 2. Tap **モデルを追加** to import an authorized MuScriptor Small F32 GGUF (once).
 3. Tap **この曲を採譜**. AI computation runs synchronously in a single app background worker.
 4. Review part selections, score previews, and the note list. Tap a note to adjust pitch/start/end.
-5. Correct BPM as needed (default **120 BPM**). Export MIDI, MusicXML or JSON with Android SAF.
+5. Correct BPM as needed (default **120 BPM**).
+6. Under **原盤 ↔ MIDI 聴き比べ**, press **▶ 同時再生**. Use shared seek and **Ⅱ 一時停止** or **■ 停止**.
+   The selected part in the part selector is the MIDI you hear. Change parts to compare separately.
+   Drag **原盤** or **MIDI** volume sliders independently; tap **原盤を消音** or **MIDIを消音**
+   to temporarily silence one track without changing its saved gain setting.
+7. Export MIDI, MusicXML or JSON with Android SAF.
 
 **Limits:** MP3 decoding capped at 10 minutes; one-job-at-a-time; native MuScriptor inference is
 CPU only and may take a very long time on low-end smartphones, or fail due to memory pressure.
@@ -103,6 +116,7 @@ The score preview is not a professional engraver. MusicXML output is **4/4 with 
 BPM and 1/16-note quantization**; it has no automatic tempo, meter, key, lyrics or reliable drum
 notation. The XML supports separate voices and tied notes but not ideal engraving in every case.
 No PDF export in this initial source. Export MusicXML for MuseScore or similar notation editors.
+The A/B player uses the original as its timeline reference: MIDI notes beyond the original's end will not continue playing. On some devices the standard Android MIDI synthesizer may have noticeable latency or different instruments.
 
 ## Verification completed
 
@@ -113,7 +127,7 @@ header and XML parsing, escaping, multiple instrument parts and overlapping voic
 bash tests/run-export-tests.sh
 ```
 
-**Not verified:** Android Gradle build, NDK cross-build, linking/binary dependencies, MuScriptor
+**Not verified:** Android Gradle build with v1.1.0 A/B playback, on-device dual MediaPlayer/MIDI synthesis, NDK cross-build, linking/binary dependencies, MuScriptor
 actual output on ARM64, device performance, real MP3/music quality, GUI lifecycle on actual phone.
 
 ## Licenses and attribution
