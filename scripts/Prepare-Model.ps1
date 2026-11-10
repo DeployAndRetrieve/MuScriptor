@@ -1,5 +1,5 @@
 # Converts an authorized MuScriptor Small checkpoint to a local GGUF, on Windows.
-# The model is NOT shipped with this application. It is subject to CC BY-NC 4.0.
+# The converted model is embedded in PRIVATE APK builds, not committed to Git. Subject to CC BY-NC 4.0.
 param([Parameter(Mandatory=$true)][string]$CheckpointDir)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -30,4 +30,4 @@ Write-Host 'Requires Python packages: numpy, safetensors (install them first if 
 Invoke-Checked 'python' @((Join-Path $vendor 'tests\muscriptor\convert_gguf.py'),
  '--source',$source,'--output',$output,'--converter',$converter.FullName,'--overwrite')
 Write-Host "Model converted: $output" -ForegroundColor Green
-Write-Host 'Copy this GGUF file to your Android device, then use the app: モデルを追加.'
+Write-Host 'The APK build now embeds this local GGUF automatically. Run .\gradlew.bat :app:assembleDebug after preparing the Android native runtime.' -ForegroundColor Green

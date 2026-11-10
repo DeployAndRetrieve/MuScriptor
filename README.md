@@ -1,147 +1,111 @@
-# MuScriptor Score v1.1.1 (Android, private non-commercial project)
+# MuScriptor Score v1.2.0
 
-An **offline-only** Android music-to-sheet application based on MuScriptor Small.
+Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開発中）
 
-**Design specification (Japanese): [docs/DESIGN.md](docs/DESIGN.md).** The document separates existing source-level features from the planned bundled-model release; model bundling is not implemented in v1.1.0.
+[設計書](docs/DESIGN.md) · [モデル内包手順](docs/BUNDLED_MODEL.md) · [第三者ライセンス表示](THIRD_PARTY_NOTICES.md)
 
-**Status: source-level integration prototype, NOT a validated ready-to-install MuScriptor application.**
-The Android UI, local MP3 decode, native C ABI adapter, event parser, simple score preview, editing,
-MIDI writer and MusicXML writer are implemented. The heavyweight third-party native engine and gated
-weights are **not bundled**. The NDK build, end-to-end inference, and APK installation have **not been
-verified on an Android device**. Running the Gradle build without preparing the native engine produces
-an APK whose UI works but whose AI transcription cannot run.
+## 現在の状態（重要）
 
-## Architecture
+**v1.2.0では、ローカルで取得・変換したGGUFをAPKに組み込み、端末で初回起動時に自動配置する処理を実装しました。** 画面から「モデルを追加」ボタンを削除しています。
 
-- Android Java app, `compileSdk 36`, `targetSdk 36`, `minSdk 26`, `versionName 1.1.1`
-- Android MediaExtractor + MediaCodec decodes local MP3 and other supported audio to mono 16 kHz
-- JNI shim `muscriptorscore_bridge` loads the local `libaudiocpp.so` C ABI **in-process** using `dlopen`
-- `audio.cpp` implements actual MuScriptor Small inference with ggml, CPU backend (no Python, no API)
-- `.gguf` Small model, copied by user into private app storage through Android Storage Access Framework
-- MuScriptor event stream (`start` / `end`) -> note list -> basic preview / MIDI / MusicXML
-- **Offline A/B playback:** the selected MP3/original audio and the generated MIDI start together.
-  Both streams share play/pause/seek controls, but have independent 0–100% gain sliders and
-  one-touch mute toggles. The MIDI preview uses the currently selected instrument part
-  (or all parts), and is regenerated from edited notes when playback is reopened.
-  MIDI playback uses Android's built-in Standard MIDI File Type 1 support rather than an
-  external server or bundled soundfont. Since two MediaPlayers are used, synchronization
-  is best-effort (periodic drift correction), **not sample accurate**. Device-specific
-  synthesizer timbre and MIDI start latency may differ. No user soundfont selection yet.
-- **No `android.permission.INTERNET` in AndroidManifest.xml**
+**ただし、GitHubリポジトリにはモデル重みもネイティブ推論ライブラリも含まれていません。** このチャットでは利用者のHugging Faceライセンス同意を代行できず、Android向けlibaudiocpp.soのクロスビルドも実機検証できていません。**今あるソースをそのままcloneしただけでは、モデル内包APKを作成できません。**
 
-No analysis server is used. The preparation/build steps use a development computer and the internet
-one time to obtain third-party source and authorized model weights; these are *build-time tasks*, not
-a phone-to-server inference workflow. The installed app is offline after the model has been imported.
+これまでと異なり、足りないモデルやエンジンがある状態で「ビルド成功」にならないよう、Gradleを修正しました。不足時は明確なエラーでビルドを停止します。「ビルド成功だがモデル未導入」にならないことを優先しています。
 
-## Why isn't the GGUF model already in the ZIP?
+## 構成
 
-Official MuScriptor model weights require accepting **CC BY-NC 4.0** at Hugging Face and are hundreds of
-megabytes. We cannot obtain or redistribute them through this session. Similarly the audio.cpp native
-runtime must be compiled for Android ARM64; it is not a normal Android Maven library. Neither is included.
+- JDK 21、Gradle Wrapper 8.13、Android Gradle Plugin 8.13.0
+- compileSdk / targetSdk 36、minSdk 26、arm64-v8a
+- Java Android + C++ JNI、音声デコードはMediaExtractor/MediaCodec
+- MuScriptor Small推論: audio.cpp C API (GGUF/CPU)。Android版C APIのビルド／実動作は未確認
+- 音符編集、楽器別MIDI (SMF Format 1)、MusicXML、JSON
+- 原盤と生成MIDIの同時比較再生、共通再生/停止/シーク、個別音量/ミュート（実機未検証）
+- AndroidManifestにINTERNET権限なし
 
-## Requirements on Windows
+## モデル内包APKのビルド手順（Windows）
 
-1. Android Studio SDK Platform 36 and Android NDK, CMake, Ninja, Git, host C++ compiler.
-2. JDK 21, Gradle **8.13** and Android Gradle Plugin **8.13.0**.
-3. Python 3, `numpy` and `safetensors` for GGUF model conversion.
-4. A **64-bit Android (ARM64)** phone with enough free storage and memory.
+### 1. 公式モデルを取得
 
-### Prepare native engine (development computer)
+[MuScriptor Small](https://huggingface.co/MuScriptor/muscriptor-small) の利用条件（重みはCC BY-NC 4.0）を確認して、**本人が同意**し、次のチェックポイントをローカルへ取得してください。
 
-Open PowerShell inside the extracted `MuScriptorScore/` directory:
+- `config.json`
+- `model.safetensors`
+
+取得にはHugging Faceへのログイン・認証が必要になる場合があります。認証トークンやモデル重みをGitHubへ登録しないでください。モデルを公開配布する場合は別途ライセンス適合性を確認してください。
+
+### 2. NDKで推論ライブラリを準備
+
+Android SDK/NDK、CMake、Ninja、Git、C++開発環境を用意します。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-Native.ps1
 ```
 
-The script clones `0xShug0/audio.cpp` at commit `e74e0aaea1a9ed0d3dde4752c73670068f9c1ea4`,
-including submodules, attempts a native CPU-only Android NDK build and copies `libaudiocpp.so` into
-`app/src/main/jniLibs/arm64-v8a/`. This route has **not been tested here**; Android-related build
-patches could be necessary in that upstream repository. It does not build a server.
+成功すると `app/src/main/jniLibs/arm64-v8a/libaudiocpp.so` を生成する設計です。サードパーティーのaudio.cppをAndroidに移植・クロスビルドするこのスクリプトは**未検証**です。ビルドが通らない場合はNDKやaudio.cppのAndroid向け修正が必要です。
 
-Check binary dependencies with `llvm-readelf -d libaudiocpp.so`; any non-system shared libraries need
-to be included alongside it. If the model build fails, no working transcription can be claimed.
-
-### Prepare your model (development computer)
-
-First accept the MuScriptor model license and download `config.json` and `model.safetensors` from:
-https://huggingface.co/MuScriptor/muscriptor-small
-
-Ensure both files are in one folder. Then run:
+### 3. GGUFへ変換
 
 ```powershell
 python -m pip install numpy safetensors
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-Model.ps1 -CheckpointDir "C:\path\to\checkpoint"
 ```
 
-This builds the audio.cpp *host* GGUF converter, and writes
-`native-build/weights/muscriptor-small-f32.gguf`.
-Copy the GGUF to your Android device (USB/MTP or ADB). In the app select **モデルを追加** once to store it
-locally. The app does not download the file itself and never sends the MP3 anywhere.
+成功時の出力:
 
-### Build and install the Android app
-
-Use Android Studio: **Open** the `MuScriptorScore/` folder and build/install `app`.
-Alternatively, from the project root in PowerShell:
-
-```powershell
-.\gradlew.bat --no-daemon :app:assembleDebug
+```text
+native-build/weights/muscriptor-small-f32.gguf
 ```
 
-The project contains Gradle Wrapper **8.13** (`gradlew`, `gradlew.bat`,
-`gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties`).
-The Wrapper JAR was obtained from the official Gradle `v8.13.0` tag and verified against
-the published SHA-256
-`81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f`.
-The distribution ZIP checksum is pinned to
-`20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78`.
-The first build downloads Gradle and Android build dependencies; offline operation refers to
-**on-device music transcription after setup**, not the development build.
-The APK appears in `app/build/outputs/apk/debug/` when the Android build succeeds.
+このモデル変換スクリプトも現行のaudio.cppとの組み合わせについて**未検証**です。
 
-## App workflow
+### 4. ビルド
 
-1. Tap **MP3を選択** and select a local audio file via SAF.
-2. Tap **モデルを追加** to import an authorized MuScriptor Small F32 GGUF (once).
-3. Tap **この曲を採譜**. AI computation runs synchronously in a single app background worker.
-4. Review part selections, score previews, and the note list. Tap a note to adjust pitch/start/end.
-5. Correct BPM as needed (default **120 BPM**).
-6. Under **原盤 ↔ MIDI 聴き比べ**, press **▶ 同時再生**. Use shared seek and **Ⅱ 一時停止** or **■ 停止**.
-   The selected part in the part selector is the MIDI you hear. Change parts to compare separately.
-   Drag **原盤** or **MIDI** volume sliders independently; tap **原盤を消音** or **MIDIを消音**
-   to temporarily silence one track without changing its saved gain setting.
-7. Export MIDI, MusicXML or JSON with Android SAF.
+```powershell
+.\gradlew.bat :app:assembleDebug
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Verify-Apk.ps1
+```
 
-**Limits:** MP3 decoding capped at 10 minutes; one-job-at-a-time; native MuScriptor inference is
-CPU only and may take a very long time on low-end smartphones, or fail due to memory pressure.
-The score preview is not a professional engraver. MusicXML output is **4/4 with fixed user-selected
-BPM and 1/16-note quantization**; it has no automatic tempo, meter, key, lyrics or reliable drum
-notation. The XML supports separate voices and tied notes but not ideal engraving in every case.
-No PDF export in this initial source. Export MusicXML for MuseScore or similar notation editors.
-The A/B player uses the original as its timeline reference: MIDI notes beyond the original's end will not continue playing. On some devices the standard Android MIDI synthesizer may have noticeable latency or different instruments.
+`scripts/Build-Android.ps1` は Gradle 実行後に APK 内容を自動検証します。通常の `gradlew.bat` や Android Studio ビルドでも、`prepareBundledModel` タスクがモデルと推論ライブラリの存在を検査します。
 
-## Verification completed
+Gradleは次を実行します：
 
-`tests/run-export-tests.sh` compiles the pure Java MIDI/MusicXML writers and verifies correct MIDI
-header and XML parsing, escaping, multiple instrument parts and overlapping voices. Run with JDK 21:
+1. 変換済みGGUFの存在、サイズ、`GGUF`ヘッダーを検査。
+2. `libaudiocpp.so` の存在とARM64 ELFヘッダーを検査。
+3. GGUFを `app/build/generated/bundledModelAssets/models/` へストリームコピー。
+4. 検証用SHA-256とファイル長を `*.sha256` に記録。
+5. `assets/models/muscriptor-small-f32.gguf` と検証情報、および `lib/arm64-v8a/libaudiocpp.so` をAPKへ格納。
+6. インストール後、初回起動時に専用領域へ自動コピー・ハッシュ検証。2回目以降は正しいモデルを再利用。
+
+`-PmuscriptorModelFile=C:\path\to\model.gguf` を付ければ変換済みモデルの入力元を変更できます（GitHubのパスへコピーする必要はありません）。
+
+**注意:** 検証は「APKにファイルがある」までを確認します。ネイティブ推論の ABI・依存 .so・モデルとの互換性、性能、実際の採譜品質は端末で別途検証してください。巨大なモデルはAPKサイズ・初回コピー用空き容量・RAMを大きく消費します。
+
+## アプリ操作
+
+1. 「MP3を選択」で端末の原盤を指定する（選択先ファイルはアップロードしない）。
+2. アプリが起動時に内包モデルを検証・初期配置する。配置中は採譜開始不可。
+3. 「この曲を採譜」で楽器別の音符を生成する。
+4. 音符やBPMを編集し、楽譜を確認する。
+5. 「原盤 ↔ MIDI 聴き比べ」で、原盤と生成MIDIを同時再生する。片側ミュートや音量0で聞き比べできる。
+6. 「MIDI保存」「楽譜保存」「JSON保存」でSAFを使って出力する。
+
+### 制限
+
+- 現在の音声デコード上限は10分。モデルロード・JNI呼び出しはメモリを大量に消費する。
+- MIDIの楽器音色は端末内MIDI再生機能に依存。比較再生の2系統同期はベストエフォートでありサンプル精度ではない。
+- MusicXMLは固定4/4・設定BPM・16分音符グリッドを使用。自動調号／テンポ検出、正確なドラム譜、PDF出力はない。
+- 現行プロジェクト保存は1曲分。楽器別ファイルの一括保存や楽譜ファイルの取り込みは未実装。
+
+## テスト
 
 ```bash
 bash tests/run-export-tests.sh
 ```
 
-**Not verified:** Android Gradle build with v1.1.0 A/B playback, on-device dual MediaPlayer/MIDI synthesis, NDK cross-build, linking/binary dependencies, MuScriptor
-actual output on ARM64, device performance, real MP3/music quality, GUI lifecycle on actual phone.
+MIDIとMusicXML生成器についての限定的なJVM単体テストです。実機でのAPKビルド・モデル内包・モデル推論・比較再生はこのチャット環境では未確認です。
 
-## Licenses and attribution
+## ライセンス
 
-- MuScriptor by Kyutai/Mirelo: **MIT code**, weights **CC BY-NC 4.0**.
-- audio.cpp by ShugoAI LLC: **Apache 2.0** with additional third-party dependencies.
-- The model weight file is not included. **Personal noncommercial use only**. Do not distribute
-  weights or package an app commercially without obtaining the relevant rights.
-- Android app glue and original code here may be modified for personal use. See `THIRD_PARTY_NOTICES.md`.
-
-Source references:
-- https://github.com/muscriptor/muscriptor
-- https://huggingface.co/MuScriptor/muscriptor-small
-- https://github.com/0xShug0/audio.cpp/blob/main/docs/models/muscriptor.md
-- https://github.com/0xShug0/audio.cpp/blob/main/docs/c_api.md
+- MuScriptorコード：MIT。モデル重み：CC BY-NC 4.0。利用条件と権利を公式配布元で確認。
+- audio.cpp：Apache 2.0（追加依存の通知要確認）。
+- 個人・非商用の利用を前提とする。モデルと秘密情報をリポジトリにコミットしない。

@@ -28,7 +28,6 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -39,7 +38,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
-    private static final int PICK_MP3=10,PICK_GGUF=11,EXPORT=12;
+    private static final int PICK_MP3=10,EXPORT=12;
     private static final int TEAL=0xff176b62, DARK=0xff123e38;
     private final Handler ui=new Handler(Looper.getMainLooper());
     private final ExecutorService jobs=Executors.newSingleThreadExecutor();
@@ -56,6 +55,8 @@ public final class MainActivity extends Activity {
     private int bpm=120,page=0;
     private String filter=null,exportKind;
     private boolean working=false;
+    private boolean modelReady=false;
+    private String modelError=null;
     private ComparisonPlayback comparison;
     private Button comparePlayButton, compareStopButton, originalMuteButton, midiMuteButton;
     private SeekBar compareSeekBar, originalVolumeSeek, midiVolumeSeek;
@@ -76,7 +77,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle savedInstance){
         super.onCreate(savedInstance);
         setTitle("MuScriptor Score v" + BuildConfig.VERSION_NAME);
-        modelFile=new File(getFilesDir(),"models/muscriptor-small-f32.gguf");
+        modelFile=BundledModelInstaller.target(this);
         comparison=new ComparisonPlayback(this,new ComparisonPlayback.Listener(){
             @Override public void onChanged(){updateComparisonUi();}
             @Override public void onError(String description){
@@ -90,6 +91,7 @@ public final class MainActivity extends Activity {
         buildUi();
         refresh();
         applyComparisonVolumes();
+        prepareBundledModel();
         ui.postDelayed(compareTicker,250);
     }
     private int dp(float amount){return (int)(getResources().getDisplayMetrics().density*amount+.5f);}
@@ -107,9 +109,8 @@ public final class MainActivity extends Activity {
         LinearLayout root=vertical();root.setPadding(dp(14),dp(10),dp(14),dp(18));scroller.addView(root);
         TextView header=text("MuScriptor Score v" + BuildConfig.VERSION_NAME,26);header.setTextColor(TEAL);root.addView(header);
         TextView subtitle=text("完全オフライン · 個人・非商用",12);root.addView(subtitle);
-        LinearLayout load=row(root);
-        put(load,button("MP3を選択",()->pick(PICK_MP3,"audio/*")));
-        put(load,button("モデルを追加",()->pick(PICK_GGUF,"*/*")));
+        root.addView(button("MP3を選択",()->pick(PICK_MP3,"audio/*")),
+                new LinearLayout.LayoutParams(-1,dp(55)));
         audioText=text("",13);root.addView(audioText);
         modelText=text("",13);root.addView(modelText);
         analyzeButton=button("この曲を採譜",this::analyze);root.addView(analyzeButton,new LinearLayout.LayoutParams(-1,dp(55)));
@@ -171,8 +172,7 @@ public final class MainActivity extends Activity {
             try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
             getPreferences(0).edit().putString("audio",uri.toString()).putString("name",audioName).apply();
             refresh();
-        } else if(request==PICK_GGUF){importModel(uri);}
-        else if(request==EXPORT){exportFile(uri);}
+        } else if(request==EXPORT){exportFile(uri);}
     }
     private String fileName(Uri uri){
         try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){
@@ -180,35 +180,40 @@ public final class MainActivity extends Activity {
         }catch(Exception ignored){}
         return "audio";
     }
-    private void importModel(Uri uri){
+    /** Unpacks the verified GGUF from the APK automatically on every fresh installation. */
+    private void prepareBundledModel(){
         if(working)return;
-        String name=fileName(uri);
-        if(!name.toLowerCase(Locale.ROOT).endsWith(".gguf")){
-            message(".gguf 形式のMuScriptor Smallモデルを指定してください");return;
-        }
-        working=true;updateBusy("モデルを内部ストレージにコピーしています…");
+        modelReady=false;
+        modelError=null;
+        working=true;
+        updateBusy("内包モデルを検証・準備しています…");
         jobs.execute(()->{
-            File temp=new File(getCacheDir(),"muscriptor-model.tmp");
             try{
-                modelFile.getParentFile().mkdirs();
-                try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(temp)){
-                    if(in==null)throw new IllegalStateException("ファイルを開けません");
-                    byte[] buf=new byte[1024*256];int n;long size=0;
-                    while((n=in.read(buf))!=-1){out.write(buf,0,n);size+=n;
-                        if(size>2_000_000_000L)throw new IllegalArgumentException("モデルが大きすぎます");
-                    }
-                    if(size<40_000_000)throw new IllegalArgumentException("MuScriptor GGUFとして小さすぎるファイルです");
-                }
-                Files.move(temp.toPath(),modelFile.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                ui.post(()->message("モデルを端末に保存しました"));
-            }catch(Exception e){temp.delete();ui.post(()->message("モデルの読み込み失敗: "+e.getMessage()));}
-            finally{ui.post(()->{working=false;refresh();});}
+                File prepared=BundledModelInstaller.ensureInstalled(getApplicationContext());
+                ui.post(()->{
+                    modelFile=prepared;
+                    modelReady=true;
+                    modelError=null;
+                    working=false;
+                    refresh();
+                });
+            }catch(Exception e){
+                final String detail=e.getMessage()==null?e.toString():e.getMessage();
+                ui.post(()->{
+                    modelReady=false;
+                    modelError=detail;
+                    working=false;
+                    refresh();
+                    message("内包モデルの準備に失敗: "+detail);
+                });
+            }
         });
     }
+
     private void analyze(){
         if(working)return;
         if(audioUri==null){message("MP3を選択してください");return;}
-        if(!modelFile.isFile()){message("まずMuScriptor SmallのGGUFモデルを追加してください");return;}
+        if(!modelReady || !modelFile.isFile()){message(modelError==null?"内包モデルを準備しています":("モデル初期化エラー: "+modelError));return;}
         working=true;updateBusy("音声を端末内でデコード中…");
         jobs.execute(()->{
             try{
@@ -228,14 +233,14 @@ public final class MainActivity extends Activity {
     }
     private void updateBusy(String detail){
         statusText.setText(detail);progress.setVisibility(working?View.VISIBLE:View.GONE);
-        analyzeButton.setEnabled(!working);
+        analyzeButton.setEnabled(!working && modelReady && audioUri!=null);
     }
     private void refresh(){
         String engine;
         try{engine=NativeBridge.nativeEngineStatus();}catch(Throwable t){engine=t.toString();}
         audioText.setText("楽曲: "+audioName);
-        modelText.setText("モデル: "+(modelFile.isFile()?"導入済み ("+(modelFile.length()/1024/1024)+" MiB)":"未導入"));
-        if(!working)updateBusy("エンジン: "+engine);
+        modelText.setText("内包モデル: "+(modelReady?"準備完了 ("+(modelFile.length()/1024/1024)+" MiB)":modelError!=null?"初期化失敗":"検証・配置中"));
+        if(!working)updateBusy(modelError==null?"エンジン: "+engine:("モデル初期化エラー: "+modelError));
         Set<String> partSet=new LinkedHashSet<>();for(NoteEvent n:notes)partSet.add(n.instrument);
         summary.setText("検出: "+notes.size()+"音符 / "+partSet.size()+"パート   |   BPM "+bpm+"・4/4（手動設定）");
         List<String> keys=new ArrayList<>(partSet);
@@ -295,6 +300,7 @@ public final class MainActivity extends Activity {
     private void settings(){
         String info="MuScriptor Score v"+BuildConfig.VERSION_NAME+"\n\n完全オフライン動作。MP3は外部送信されません。\n\n推論: MuScriptor Small / audio.cpp C API (CPU)\n"+
         "モデル: CC BY-NC 4.0（非商用）\nMuScriptorソース: MIT\naudio.cpp: Apache 2.0\n"+
+        "モデル: "+(modelReady?"内包モデル準備完了":"準備中／エラー")+"\n"+
         "楽譜表示は簡易プレビュー、MusicXML出力は4/4固定です。\n\n"+
         "開発: DEPLOY & RETRIEVE";
         new AlertDialog.Builder(this).setTitle("MuScriptor Score v" + BuildConfig.VERSION_NAME).setMessage(info)

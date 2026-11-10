@@ -6,8 +6,8 @@ android {
         applicationId 'com.deployandretrieve.muscriptorscore'
         minSdk 26
         targetSdk 36
-        versionCode 5
-        versionName '1.1.1'
+        versionCode 6
+        versionName '1.2.0'
         ndk { abiFilters 'arm64-v8a' }
     }
     buildFeatures { buildConfig true }
@@ -15,4 +15,105 @@ android {
     externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt' } }
     buildTypes { release { minifyEnabled false } }
     packaging { jniLibs { useLegacyPackaging = true } }
+    androidResources { noCompress.add('gguf') }
+    sourceSets { main { assets.srcDir(layout.buildDirectory.dir('generated/bundledModelAssets')) } }
+}
+
+
+/*
+ * Local-only model packaging. Missing model/runtime is a fatal build error,
+ * never a silent 'successful' APK without transcription support.
+ */
+def modelSource = providers.gradleProperty('muscriptorModelFile')
+        .map { file(it) }.orElse(file("$rootDir/native-build/weights/muscriptor-small-f32.gguf"))
+def generatedModelAssets = layout.buildDirectory.dir('generated/bundledModelAssets')
+def modelName = 'muscriptor-small-f32.gguf'
+
+def prepareBundledModel = tasks.register('prepareBundledModel') {
+    group = 'build'
+    description = 'Verify and package a licensed GGUF with Android ARM64 inference runtime'
+    doLast {
+        File input = modelSource.get()
+        if (!input.isFile()) {
+            throw new GradleException(
+                'MuScriptor GGUFモデルがありません: ' + input + '\n' +
+                'モデルのライセンスに同意し、scripts/Prepare-Model.ps1 でGGUFへ変換してください。\n' +
+                'モデルなしのAPKを作成することはできません。')
+        }
+        if (input.length() < 40_000_000L || input.length() > 2_000_000_000L) {
+            throw new GradleException('GGUFモデルのサイズが不正です: ' + input.length() + ' bytes')
+        }
+        input.withInputStream { stream ->
+            byte[] head = new byte[4]
+            if (stream.read(head) != 4 || !java.util.Arrays.equals(head, [71, 71, 85, 70] as byte[])) {
+                throw new GradleException('モデルがGGUF形式ではありません: ' + input)
+            }
+        }
+        File nativeRuntime = file('src/main/jniLibs/arm64-v8a/libaudiocpp.so')
+        if (!nativeRuntime.isFile() || nativeRuntime.length() < 4096L) {
+            throw new GradleException(
+                '推論エンジンがありません: ' + nativeRuntime + '\n' +
+                'scripts/Prepare-Native.ps1 でARM64版libaudiocpp.soを構築してください。\n' +
+                'エンジンなしのAPKを作成することはできません。')
+        }
+        nativeRuntime.withInputStream { stream ->
+            byte[] head = new byte[20]
+            if (stream.read(head) != 20 || head[0] != 0x7f || head[1] != 0x45 ||
+                    head[2] != 0x4c || head[3] != 0x46 || head[4] != 2 || head[5] != 1 ||
+                    (head[18] & 255) != 183 || (head[19] & 255) != 0) {
+                throw new GradleException('libaudiocpp.so は有効なARM64 ELFファイルではありません')
+            }
+        }
+
+        // Stream hashes and copies; never keep the full model in Gradle's heap.
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        byte[] buffer = new byte[1024 * 1024]
+        input.withInputStream { stream ->
+            int n
+            while ((n = stream.read(buffer)) != -1) digest.update(buffer, 0, n)
+        }
+        String hash = digest.digest().collect { String.format('%02x', it & 0xff) }.join('')
+        File directory = new File(generatedModelAssets.get().asFile, 'models')
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new GradleException('Cannot create asset folder: ' + directory)
+        }
+        File output = new File(directory, modelName)
+        File manifest = new File(directory, modelName + '.sha256')
+        String expected = hash + ' ' + input.length() + '\n'
+
+        if (!output.isFile() || output.length() != input.length() ||
+                !manifest.isFile() || manifest.getText('US-ASCII') != expected) {
+            File temp = new File(directory, modelName + '.tmp')
+            try {
+                input.withInputStream { src ->
+                    temp.withOutputStream { dest ->
+                        int n
+                        while ((n = src.read(buffer)) != -1) dest.write(buffer, 0, n)
+                    }
+                }
+                def copied = java.security.MessageDigest.getInstance('SHA-256')
+                temp.withInputStream { src ->
+                    int n
+                    while ((n = src.read(buffer)) != -1) copied.update(buffer, 0, n)
+                }
+                String copiedHash = copied.digest().collect { String.format('%02x', it & 0xff) }.join('')
+                if (temp.length() != input.length() || copiedHash != hash) {
+                    throw new GradleException('モデルのコピー後SHA-256検証に失敗しました')
+                }
+                java.nio.file.Files.move(temp.toPath(), output.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                manifest.setText(expected, 'US-ASCII')
+            } finally {
+                if (temp.exists()) temp.delete()
+            }
+        }
+        logger.lifecycle('Bundled MuScriptor GGUF: ' + input.length() + ' bytes / SHA-256 ' + hash)
+        logger.lifecycle('Native runtime: ' + nativeRuntime.length() + ' bytes')
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == 'preBuild' || task.name ==~ /merge[A-Z].*Assets/) {
+        task.dependsOn(prepareBundledModel)
+    }
 }
