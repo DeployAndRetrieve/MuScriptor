@@ -1,4 +1,4 @@
-# MuScriptor Score v1.1.0 (Android, private non-commercial project)
+# MuScriptor Score v1.1.1 (Android, private non-commercial project)
 
 An **offline-only** Android music-to-sheet application based on MuScriptor Small.
 
@@ -13,7 +13,7 @@ an APK whose UI works but whose AI transcription cannot run.
 
 ## Architecture
 
-- Android Java app, `compileSdk 36`, `targetSdk 36`, `minSdk 26`, `versionName 1.1.0`
+- Android Java app, `compileSdk 36`, `targetSdk 36`, `minSdk 26`, `versionName 1.1.1`
 - Android MediaExtractor + MediaCodec decodes local MP3 and other supported audio to mono 16 kHz
 - JNI shim `muscriptorscore_bridge` loads the local `libaudiocpp.so` C ABI **in-process** using `dlopen`
 - `audio.cpp` implements actual MuScriptor Small inference with ggml, CPU backend (no Python, no API)

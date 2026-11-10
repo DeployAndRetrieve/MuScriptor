@@ -75,7 +75,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstance){
         super.onCreate(savedInstance);
-        setTitle("MuScriptor Score");
+        setTitle("MuScriptor Score v" + BuildConfig.VERSION_NAME);
         modelFile=new File(getFilesDir(),"models/muscriptor-small-f32.gguf");
         comparison=new ComparisonPlayback(this,new ComparisonPlayback.Listener(){
             @Override public void onChanged(){updateComparisonUi();}
@@ -105,7 +105,7 @@ public final class MainActivity extends Activity {
     private void buildUi(){
         ScrollView scroller=new ScrollView(this);setContentView(scroller);
         LinearLayout root=vertical();root.setPadding(dp(14),dp(10),dp(14),dp(18));scroller.addView(root);
-        TextView header=text("MuScriptor Score",26);header.setTextColor(TEAL);root.addView(header);
+        TextView header=text("MuScriptor Score v" + BuildConfig.VERSION_NAME,26);header.setTextColor(TEAL);root.addView(header);
         TextView subtitle=text("完全オフライン · 個人・非商用",12);root.addView(subtitle);
         LinearLayout load=row(root);
         put(load,button("MP3を選択",()->pick(PICK_MP3,"audio/*")));
