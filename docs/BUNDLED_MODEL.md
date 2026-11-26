@@ -1,4 +1,4 @@
-# モデル内包方式 — MuScriptor Score v1.2.0
+# モデル内包方式 — MuScriptor Score v1.2.1
 
 更新日: 2026-11-11
 対象: `DeployAndRetrieve/MuScriptor`、Android ARM64、minSdk 26。
@@ -8,6 +8,21 @@
 **内包処理はv1.2.0でソース実装したが、モデル重み自体はリポジトリに存在しない。** また `libaudiocpp.so` もソース配布に含まれない。ユーザーのライセンス受諾と開発PCでの取得・変換・Androidネイティブビルドが必要である。
 
 従来はモデルとエンジンなしでもインストール可能なAPKを生成していた。v1.2.0からは**両方が不足している場合にビルドをエラーで停止**する。以後、モデル未同梱のAPKが誤って成功扱いにならないことを優先する。
+
+## 0. モデルを取得する最短手順（v1.2.1追加）
+
+公式MuScriptor Smallのモデル重みには[CC BY-NC 4.0および付帯条件](https://huggingface.co/MuScriptor/muscriptor-small)が適用される。利用条件を読み、採譜する音源について必要な権利を有していることを確認する。
+
+公式safetensorsからの変換とは別に、audio.cppの作者が[公開配布するF32 GGUF（412 MB）](https://huggingface.co/audio-cpp/audio.cpp-gguf/blob/main/MuScriptor-Small-GGUF/muscriptor-small-f32.gguf)を利用できる。条件を確認・承諾した後、Windows PowerShellで以下を**一度だけ**実行する。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Download-Model.ps1 -AcceptModelTerms
+```
+
+ダウンロード時に配布元の公表SHA-256 `4bff6f1c45b445e144c176434fbe27614ad6c4686e03f99ee11b17e15163fba2` を検証し、`native-build/weights/muscriptor-small-f32.gguf` へ配置する。これにより**公式safetensorsの取得・変換作業は省略可能**になる。モデル本体はGitに含めない。
+
+**この操作はモデル不足を解消するものであり、Android用推論ライブラリの不足は解消しない。** 次に`scripts/Prepare-Native.ps1`を実行し、`app/src/main/jniLibs/arm64-v8a/libaudiocpp.so`を生成する必要がある。同スクリプトのAndroidクロスビルドは未検証。
+
 
 ## 1. ビルド依存関係
 
@@ -72,11 +87,10 @@ Gradleタスク           ↓
 
 ## 5. 実行手順
 
-1. Hugging Face公式モデルページで利用条件を確認し、ユーザーが同意する。
-2. `config.json` と `model.safetensors` を開発PCに保存する。
-3. `scripts/Prepare-Native.ps1`（Android推論ライブラリ、未検証）を実行。
-4. `scripts/Prepare-Model.ps1 -CheckpointDir "C:\path\to\checkpoint"`（GGUF、未検証）を実行。
-5. `.\gradlew.bat :app:assembleDebug` を実行。
+1. 元のモデルの利用条件を確認し、ユーザーが同意する。
+2. `scripts/Download-Model.ps1 -AcceptModelTerms` で公開GGUFを取得・検証する。もしくは元の `config.json` / `model.safetensors` を入手して `scripts/Prepare-Model.ps1` で変換する。
+3. `scripts/Prepare-Native.ps1`（Android推論ライブラリ、未検証）を実行する。
+4. `.\gradlew.bat :app:assembleDebug` を実行する。
 6. `scripts/Verify-Apk.ps1` を実行し、必須エントリのサイズを確認。
 7. Android端末へAPKをインストールし、初回起動のモデル配置を確認。
 8. 原盤を選び、採譜・書出し・原盤/MIDI同時再生を確認する。

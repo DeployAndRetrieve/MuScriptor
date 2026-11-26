@@ -1,4 +1,4 @@
-# MuScriptor Score v1.2.0
+# MuScriptor Score v1.2.1
 
 Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開発中）
 
@@ -8,7 +8,7 @@ Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開�
 
 **v1.2.0では、ローカルで取得・変換したGGUFをAPKに組み込み、端末で初回起動時に自動配置する処理を実装しました。** 画面から「モデルを追加」ボタンを削除しています。
 
-**ただし、GitHubリポジトリにはモデル重みもネイティブ推論ライブラリも含まれていません。** このチャットでは利用者のHugging Faceライセンス同意を代行できず、Android向けlibaudiocpp.soのクロスビルドも実機検証できていません。**今あるソースをそのままcloneしただけでは、モデル内包APKを作成できません。**
+**ただし、GitHubリポジトリにはモデル重みもネイティブ推論ライブラリも含まれていません。** v1.2.1では第三者が公開している**変換済みGGUFの取得・SHA-256検証スクリプト**を追加しました。モデル利用条件への同意は開発者本人が行う必要があり、Android向け`libaudiocpp.so`のクロスビルドは未検証です。**clone直後のGradleビルドは、モデルとエンジンの準備が完了するまで意図的に失敗します。**
 
 これまでと異なり、足りないモデルやエンジンがある状態で「ビルド成功」にならないよう、Gradleを修正しました。不足時は明確なエラーでビルドを停止します。「ビルド成功だがモデル未導入」にならないことを優先しています。
 
@@ -24,14 +24,27 @@ Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開�
 
 ## モデル内包APKのビルド手順（Windows）
 
-### 1. 公式モデルを取得
+### 1. 変換済みGGUFを取得（最短）
 
-[MuScriptor Small](https://huggingface.co/MuScriptor/muscriptor-small) の利用条件（重みはCC BY-NC 4.0）を確認して、**本人が同意**し、次のチェックポイントをローカルへ取得してください。
+MuScriptor Small F32 GGUFは音声推論ライブラリaudio.cpp側の[公開モデルパッケージ（412 MB）](https://huggingface.co/audio-cpp/audio.cpp-gguf/blob/main/MuScriptor-Small-GGUF/muscriptor-small-f32.gguf)から直接取得できます。**本体の取得・変換作業を省略できます。**
 
-- `config.json`
-- `model.safetensors`
+まず、[元のMuScriptor Smallモデルの利用条件](https://huggingface.co/MuScriptor/muscriptor-small)を確認してください。重みは**CC BY-NC 4.0**で、採譜する音源について必要な権利を有することが求められます。条件に同意した後、Windows PowerShellのリポジトリルートで次を実行します。
 
-取得にはHugging Faceへのログイン・認証が必要になる場合があります。認証トークンやモデル重みをGitHubへ登録しないでください。モデルを公開配布する場合は別途ライセンス適合性を確認してください。
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Download-Model.ps1 -AcceptModelTerms
+```
+
+この処理は次の配置先に公開済みGGUFをダウンロードし、配布ページ記載の**SHA-256**と比較します。
+
+```text
+native-build/weights/muscriptor-small-f32.gguf
+SHA-256: 4bff6f1c45b445e144c176434fbe27614ad6c4686e03f99ee11b17e15163fba2
+```
+
+`-AcceptModelTerms`は規約受諾を**明示的に申告するオプション**です。スクリプトが公式サイトで利用条件への同意や認証を代行するものではありません。公開変換済みGGUFにも元のモデルのライセンスが適用されます。GitHubに重みはコミットしません。
+
+元の公式`config.json`と`model.safetensors`を自分のHugging Faceアカウントで取得し、変換する従来の方法も残しています（下記「手動変換」参照）。
+
 
 ### 2. NDKで推論ライブラリを準備
 
@@ -43,7 +56,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-Native
 
 成功すると `app/src/main/jniLibs/arm64-v8a/libaudiocpp.so` を生成する設計です。サードパーティーのaudio.cppをAndroidに移植・クロスビルドするこのスクリプトは**未検証**です。ビルドが通らない場合はNDKやaudio.cppのAndroid向け修正が必要です。
 
-### 3. GGUFへ変換
+### 3. 手動変換（公開GGUFを使わない場合のみ）
 
 ```powershell
 python -m pip install numpy safetensors
@@ -56,7 +69,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-Model.
 native-build/weights/muscriptor-small-f32.gguf
 ```
 
-このモデル変換スクリプトも現行のaudio.cppとの組み合わせについて**未検証**です。
+このモデル変換スクリプトも現行のaudio.cppとの組み合わせについて**未検証**です。**上記1の公開済みGGUFをダウンロードした場合、この工程は不要です。**
 
 ### 4. ビルド
 
