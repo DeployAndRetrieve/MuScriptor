@@ -1,4 +1,4 @@
-# MuScriptor Score v1.2.1
+# MuScriptor Score v1.2.2
 
 Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開発中）
 
@@ -35,6 +35,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Download-Model
 ```
 
 この処理は次の配置先に公開済みGGUFをダウンロードし、配布ページ記載の**SHA-256**と比較します。
+
+**Windows PowerShell 5.1対応（v1.2.2）：** `Download-Model.ps1` 内の表示メッセージをASCIIのみとし、UTF-8のBOMなしファイルをANSIとして誤読して構文エラーになる問題を解消しました。
 
 ```text
 native-build/weights/muscriptor-small-f32.gguf

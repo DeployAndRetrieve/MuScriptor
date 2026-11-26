@@ -1,4 +1,4 @@
-# モデル内包方式 — MuScriptor Score v1.2.1
+# モデル内包方式 — MuScriptor Score v1.2.2
 
 更新日: 2026-11-11
 対象: `DeployAndRetrieve/MuScriptor`、Android ARM64、minSdk 26。
@@ -9,7 +9,7 @@
 
 従来はモデルとエンジンなしでもインストール可能なAPKを生成していた。v1.2.0からは**両方が不足している場合にビルドをエラーで停止**する。以後、モデル未同梱のAPKが誤って成功扱いにならないことを優先する。
 
-## 0. モデルを取得する最短手順（v1.2.1追加）
+## 0. モデルを取得する最短手順（v1.2.1追加、v1.2.2文字コード修正）
 
 公式MuScriptor Smallのモデル重みには[CC BY-NC 4.0および付帯条件](https://huggingface.co/MuScriptor/muscriptor-small)が適用される。利用条件を読み、採譜する音源について必要な権利を有していることを確認する。
 
