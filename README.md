@@ -1,4 +1,4 @@
-# MuScriptor Score v1.2.2
+# MuScriptor Score v1.2.3
 
 Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開発中）
 
@@ -51,6 +51,8 @@ SHA-256: 4bff6f1c45b445e144c176434fbe27614ad6c4686e03f99ee11b17e15163fba2
 ### 2. NDKで推論ライブラリを準備
 
 Android SDK/NDK、CMake、Ninja、Git、C++開発環境を用意します。
+
+**Windows PowerShellで`cmake`が見つからない場合：** v1.2.3から`Prepare-Native.ps1`がAndroid SDK内の`cmake/<バージョン>/bin/cmake.exe`と`ninja.exe`を直接検出します。PATHの変更は通常不要です。Android StudioのSDK ManagerでCMakeとNDKがインストールされていることを確認してください。必要なら`-CmakePath`と`-NinjaPath`でパスを指定できます。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-Native.ps1

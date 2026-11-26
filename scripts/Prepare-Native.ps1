@@ -1,7 +1,7 @@
 # Build the native MuScriptor GGUF runtime for Android arm64-v8a.
 # Requires a Windows host with Git, CMake, Ninja, Android SDK+NDK, C++ toolchain.
 # The script does NOT download model weights; accept their license separately.
-param([string]$AndroidSdk = "", [string]$NdkPath = "")
+param([string]$AndroidSdk = "", [string]$NdkPath = "", [string]$CmakePath = "", [string]$NinjaPath = "")
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -24,6 +24,66 @@ if (-not $NdkPath) {
   if ($ndks.Count -eq 0) { throw 'No NDK versions found' }
   $NdkPath = $ndks[0].FullName
 }
+# Resolve CMake and Ninja from the Android SDK when they are not on PATH.
+# Android Studio/Gradle may install both under SDK/cmake/<version>/bin.
+$cmakeRoot = Join-Path $AndroidSdk 'cmake'
+$cmakeDirs = @()
+if (Test-Path -LiteralPath $cmakeRoot -PathType Container) {
+  $cmakeDirs = @(Get-ChildItem -LiteralPath $cmakeRoot -Directory |
+    Sort-Object -Property @{ Expression = {
+      try { [version]$_.Name } catch { [version]'0.0' }
+    }; Descending = $true })
+}
+if (-not $CmakePath) {
+  foreach ($dir in $cmakeDirs) {
+    $candidate = Join-Path $dir.FullName 'bin\cmake.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      $CmakePath = $candidate
+      break
+    }
+  }
+  if (-not $CmakePath) {
+    $found = Get-Command cmake.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($found) { $CmakePath = $found.Source }
+  }
+}
+if (-not $CmakePath -or -not (Test-Path -LiteralPath $CmakePath -PathType Leaf)) {
+  throw ("CMake not found. Install CMake in Android SDK Manager > SDK Tools > " +
+    "CMake, or pass -CmakePath to this script. SDK checked: " + $cmakeRoot)
+}
+$CmakePath = (Resolve-Path -LiteralPath $CmakePath).Path
+$cmakeBin = Split-Path -Parent $CmakePath
+
+if (-not $NinjaPath) {
+  $localNinja = Join-Path $cmakeBin 'ninja.exe'
+  if (Test-Path -LiteralPath $localNinja -PathType Leaf) {
+    $NinjaPath = $localNinja
+  }
+  if (-not $NinjaPath) {
+    foreach ($dir in $cmakeDirs) {
+      $candidate = Join-Path $dir.FullName 'bin\ninja.exe'
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $NinjaPath = $candidate
+        break
+      }
+    }
+  }
+  if (-not $NinjaPath) {
+    $found = Get-Command ninja.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($found) { $NinjaPath = $found.Source }
+  }
+}
+if (-not $NinjaPath -or -not (Test-Path -LiteralPath $NinjaPath -PathType Leaf)) {
+  throw ("Ninja not found. Install CMake with Ninja in Android SDK Manager > " +
+    "SDK Tools, or pass -NinjaPath. SDK checked: " + $cmakeRoot)
+}
+$NinjaPath = (Resolve-Path -LiteralPath $NinjaPath).Path
+# Let CMake find its bundled Ninja and helper tools without requiring a
+# machine-wide PATH change. Both paths may contain spaces.
+$env:PATH = $cmakeBin + ';' + (Split-Path -Parent $NinjaPath) + ';' + $env:PATH
+Write-Host ("Using CMake: " + $CmakePath) -ForegroundColor Green
+Write-Host ("Using Ninja: " + $NinjaPath) -ForegroundColor Green
+
 $toolchain = Join-Path $NdkPath 'build\cmake\android.toolchain.cmake'
 if (-not (Test-Path $toolchain)) { throw "Android NDK toolchain missing: $toolchain" }
 New-Item -ItemType Directory -Force (Split-Path $vendor) | Out-Null
@@ -34,7 +94,8 @@ Invoke-Checked 'git' @('-C', $vendor, 'fetch', '--depth', '1', 'origin', $pin)
 Invoke-Checked 'git' @('-C', $vendor, 'checkout', '--detach', $pin)
 Invoke-Checked 'git' @('-C', $vendor, 'submodule', 'update', '--init', '--recursive')
 $build = Join-Path $root 'native-build\android-arm64'
-Invoke-Checked 'cmake' @('-S', $vendor, '-B', $build, '-G', 'Ninja',
+Invoke-Checked $CmakePath @('-S', $vendor, '-B', $build, '-G', 'Ninja',
+  "-DCMAKE_MAKE_PROGRAM=$NinjaPath",
   "-DCMAKE_TOOLCHAIN_FILE=$toolchain", '-DANDROID_ABI=arm64-v8a', '-DANDROID_PLATFORM=android-26',
   '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_CXX_STANDARD=17',
   '-DAUDIOCPP_MODEL_SET=custom', '-DAUDIOCPP_MODELS=muscriptor',
@@ -43,7 +104,7 @@ Invoke-Checked 'cmake' @('-S', $vendor, '-B', $build, '-G', 'Ninja',
   '-DENGINE_ENABLE_OPENMP=OFF', '-DGGML_OPENMP=OFF', '-DENGINE_ENABLE_VULKAN=OFF',
   '-DENGINE_ENABLE_CUDA=OFF', '-DENGINE_ENABLE_METAL=OFF',
   '-DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=OFF')
-Invoke-Checked 'cmake' @('--build', $build, '--target', 'audiocpp', '--parallel', '4')
+Invoke-Checked $CmakePath @('--build', $build, '--target', 'audiocpp', '--parallel', '4')
 $library = Get-ChildItem $build -Filter 'libaudiocpp.so' -Recurse | Select-Object -First 1
 if (-not $library) { throw 'Build succeeded but libaudiocpp.so was not located' }
 $dest=Join-Path $root 'app\src\main\jniLibs\arm64-v8a'
