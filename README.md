@@ -1,4 +1,4 @@
-# MuScriptor Score v1.2.4
+# MuScriptor Score v1.2.5
 
 Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開発中）
 
@@ -76,6 +76,8 @@ native-build/weights/muscriptor-small-f32.gguf
 ```
 
 このモデル変換スクリプトも現行のaudio.cppとの組み合わせについて**未検証**です。**上記1の公開済みGGUFをダウンロードした場合、この工程は不要です。**
+
+**v1.2.5:** `scripts/Verify-Apk.ps1` もWindows PowerShell 5.1向けにASCII文字のみとし、BOMなしUTF-8の日本語が文字化けして構文エラーになる不具合を修正しました。ほかの`scripts/*.ps1`も確認済みです。
 
 ### 4. ビルド
 
