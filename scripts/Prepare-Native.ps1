@@ -93,6 +93,45 @@ if (-not (Test-Path (Join-Path $vendor '.git'))) {
 Invoke-Checked 'git' @('-C', $vendor, 'fetch', '--depth', '1', 'origin', $pin)
 Invoke-Checked 'git' @('-C', $vendor, 'checkout', '--detach', $pin)
 Invoke-Checked 'git' @('-C', $vendor, 'submodule', 'update', '--init', '--recursive')
+# SentencePiece unconditionally adds a -fmacro-prefix-map argument using
+# CMAKE_SOURCE_DIR without shell-quoting. Ninja splits it at spaces, causing:
+#   clang++: no such file or directory: 'Files'
+#   clang++: invalid argument 'E:/Program' to -fmacro-prefix-map=
+# Disable only this optional source-path-rewriting flag for a source path
+# with whitespace. This does NOT disable SentencePiece or GGML features.
+# Do not patch the whole toolchain, and leave other compiler flags intact.
+if ($vendor -match '\s') {
+  $spCmake = Join-Path $vendor 'external\sentencepiece\CMakeLists.txt'
+  if (-not (Test-Path -LiteralPath $spCmake -PathType Leaf)) {
+    throw "SentencePiece CMakeLists.txt not found: $spCmake"
+  }
+  $spLines = [System.IO.File]::ReadAllLines($spCmake, [System.Text.Encoding]::UTF8)
+  $badPrefix = 'string(APPEND CMAKE_CXX_FLAGS " -fmacro-prefix-map='
+  $patchMarker = '# MuScriptor: omit unquoted prefix-map when source path contains spaces'
+  $hits = 0
+  $changed = $false
+  for ($i = 0; $i -lt $spLines.Length; $i++) {
+    if ($spLines[$i].Contains($badPrefix)) {
+      $spLines[$i] = '  ' + $patchMarker
+      $hits++
+      $changed = $true
+    } elseif ($spLines[$i].Contains($patchMarker)) {
+      $hits++
+    }
+  }
+  if ($hits -ne 1) {
+    throw ("Cannot safely patch SentencePiece prefix-map (matches: $hits). " +
+      "Check upstream source: " + $spCmake)
+  }
+  if ($changed) {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllLines($spCmake, $spLines, $utf8NoBom)
+    Write-Host 'Patched SentencePiece CMake flags for source path with spaces.' -ForegroundColor Green
+  } else {
+    Write-Host 'SentencePiece path-with-spaces patch already applied.'
+  }
+}
+
 $build = Join-Path $root 'native-build\android-arm64'
 Invoke-Checked $CmakePath @('-S', $vendor, '-B', $build, '-G', 'Ninja',
   "-DCMAKE_MAKE_PROGRAM=$NinjaPath",

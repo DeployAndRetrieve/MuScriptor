@@ -1,4 +1,4 @@
-# モデル内包方式 — MuScriptor Score v1.2.3
+# モデル内包方式 — MuScriptor Score v1.2.4
 
 更新日: 2026-11-11
 対象: `DeployAndRetrieve/MuScriptor`、Android ARM64、minSdk 26。
@@ -63,6 +63,8 @@ Gradleタスク           ↓
 - `scripts/Build-Android.ps1`：Gradleビルド後にAPKエントリの検証。
 
 > **2026-11-27 / v1.2.3**：Windows PowerShell上で`cmake`がPATHにない場合でも、`Prepare-Native.ps1`がAndroid SDK `cmake/<version>/bin`からCMakeとNinjaを検出するよう修正した。使用する実行ファイルを表示し、不足時にはSDK Managerの確認または明示的な`-CmakePath`／`-NinjaPath`指定を案内する。クロスビルド自体の成功は未検証。
+
+> **2026-11-28 / v1.2.4**：Windowsの空白入りソースパスでSentencePieceの未引用`-fmacro-prefix-map`がClangの引数分割を引き起こす。ビルド用スクリプトで、ローカルにcheckoutした上流`external/sentencepiece/CMakeLists.txt`の当該オプションのみを条件付きで抑止する。パッチは再実行時にも安全（冪等）。GGUFやJDK・NDKの再取得は不要。Androidクロスビルド全体の成功はまだ未検証。
 
 ## 3. ビルドの失敗条件
 

@@ -1,4 +1,4 @@
-# MuScriptor Score v1.2.3
+# MuScriptor Score v1.2.4
 
 Android / ARM64 / 個人・非商用 / 完全オフライン音楽採譜（開発中）
 
@@ -57,6 +57,8 @@ Android SDK/NDK、CMake、Ninja、Git、C++開発環境を用意します。
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-Native.ps1
 ```
+
+**v1.2.4の修正:** `E:\Program Files (x86)\...` のような空白を含むフォルダーで、外部ライブラリSentencePieceのCMakeが引用符なしの`-fmacro-prefix-map`を生成し、Clangが`Files`を別引数として扱って失敗する問題を回避します。`Prepare-Native.ps1`が必要な場合のみ、`third_party/audio.cpp/external/sentencepiece/CMakeLists.txt`内のこの**任意のソースパス書換オプションだけ**をローカルで無効化します。他のコンパイラーフラグや推論機能は変更しません。
 
 成功すると `app/src/main/jniLibs/arm64-v8a/libaudiocpp.so` を生成する設計です。サードパーティーのaudio.cppをAndroidに移植・クロスビルドするこのスクリプトは**未検証**です。ビルドが通らない場合はNDKやaudio.cppのAndroid向け修正が必要です。
 
