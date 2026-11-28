@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -136,4 +137,96 @@ Java_com_deployandretrieve_muscriptorscore_NativeBridge_nativeAnalyze(
         if (!json)throw std::runtime_error("No note events returned");
         return env->NewStringUTF(json);
     }catch(const std::exception &e){throwJava(env,e);return nullptr;}
+}
+
+
+// Warm-session API for independent overlapping audio windows. Keeping one
+// model/session alive avoids reloading the 400+ MB weights for every window.
+namespace {
+struct WarmAnalyzer {
+    Api api;
+    Objects objects;
+    explicit WarmAnalyzer(const char *modelPath) : api(), objects(api) {
+        api.check(api.registry_create(nullptr, &objects.registry), "registry_create");
+        ModelConfig conf{"muscriptor", nullptr, nullptr, nullptr};
+        api.check(api.model_load(objects.registry, modelPath, &conf, nullptr,
+                                 &objects.model), "model_load");
+        BackendConfig backend{"cpu", 0, 2};
+        api.check(api.session_create(objects.model, "midi", "offline", &backend,
+                                     nullptr, &objects.session), "session_create");
+    }
+};
+
+struct ScopedRequest {
+    Api &api;
+    Request *request = nullptr;
+    Result *result = nullptr;
+    explicit ScopedRequest(Api &api) : api(api) {}
+    ~ScopedRequest() {
+        if (result) api.result_free(result);
+        if (request) api.request_free(request);
+    }
+};
+} // namespace
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_deployandretrieve_muscriptorscore_NativeBridge_nativeOpenAnalyzer(
+        JNIEnv *env, jclass, jstring modelPath) {
+    try {
+        if (!modelPath) throw std::runtime_error("Model path is null");
+        UtfString path(env, modelPath);
+        if (!path.p) throw std::runtime_error("Model path cannot be read");
+        std::unique_ptr<WarmAnalyzer> analyzer(new WarmAnalyzer(path.p));
+        return static_cast<jlong>(reinterpret_cast<intptr_t>(analyzer.release()));
+    } catch (const std::exception &e) {
+        throwJava(env, e);
+        return 0;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_deployandretrieve_muscriptorscore_NativeBridge_nativeAnalyzeChunk(
+        JNIEnv *env, jclass, jlong handle, jfloatArray pcm,
+        jint sampleRate, jint maxTokens) {
+    try {
+        if (!handle || !pcm || sampleRate < 8000 || maxTokens <= 0)
+            throw std::runtime_error("Invalid chunk inference arguments");
+        auto *analyzer = reinterpret_cast<WarmAnalyzer*>(static_cast<intptr_t>(handle));
+        Api &api = analyzer->api;
+        ScopedRequest scoped(api);
+        scoped.request = api.request_create();
+        if (!scoped.request) throw std::runtime_error("request_create failed");
+        const jsize count = env->GetArrayLength(pcm);
+        if (count <= 0) throw std::runtime_error("Empty audio window");
+        jfloat *samples = env->GetFloatArrayElements(pcm, nullptr);
+        if (!samples) throw std::runtime_error("Could not access audio samples");
+        Status status = api.request_audio(scoped.request, samples,
+                                           static_cast<size_t>(count), sampleRate, 1);
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        api.check(status, "request_set_audio");
+        api.check(api.request_option(scoped.request, "output_format", "json"), "output_format");
+        std::string tokens = std::to_string(maxTokens);
+        api.check(api.request_option(scoped.request, "max_tokens", tokens.c_str()), "max_tokens");
+        api.check(api.request_option(scoped.request, "do_sample", "false"), "do_sample");
+        api.check(api.session_run(analyzer->objects.session, scoped.request, &scoped.result),
+                  "session_run");
+        const char *json = nullptr;
+        const char *language = nullptr;
+        api.check(api.result_text(scoped.result, &json, &language), "result_text");
+        if (!json) throw std::runtime_error("No note events returned for chunk");
+        // NewStringUTF copies before ScopedRequest frees its borrowed buffer.
+        return env->NewStringUTF(json);
+    } catch (const std::exception &e) {
+        throwJava(env, e);
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_deployandretrieve_muscriptorscore_NativeBridge_nativeCloseAnalyzer(
+        JNIEnv *, jclass, jlong handle) {
+    if (handle) {
+        auto *analyzer = reinterpret_cast<WarmAnalyzer*>(static_cast<intptr_t>(handle));
+        delete analyzer;
+    }
 }

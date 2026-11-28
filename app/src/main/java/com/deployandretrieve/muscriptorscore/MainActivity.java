@@ -48,7 +48,7 @@ public final class MainActivity extends Activity {
     private final List<NoteEvent> notes=new ArrayList<>();
     private TextView audioText,modelText,statusText,summary;
     private ProgressBar progress;
-    private Button analyzeButton,prevButton,nextButton;
+    private Button analyzeButton, pauseTranscriptionButton, restartTranscriptionButton,prevButton,nextButton;
     private Spinner partSpinner;
     private ScoreView score;
     private ListView noteList;
@@ -58,6 +58,48 @@ public final class MainActivity extends Activity {
     private boolean modelReady=false;
     private String modelError=null;
     private ComparisonPlayback comparison;
+
+    private final ChunkedTranscription.Listener transcriptionListener =
+            new ChunkedTranscription.Listener() {
+        @Override public void onState(String detail) {
+            working = true;
+            updateBusy(detail);
+        }
+        @Override public void onProgress(int finished, int total, List<NoteEvent> merged) {
+            working = true;
+            comparison.reset();
+            notes.clear();
+            notes.addAll(merged);
+            progress.setIndeterminate(false);
+            progress.setMax(Math.max(1, total));
+            progress.setProgress(finished);
+            page = 0;
+            refresh();
+            updateBusy("区間ごとに保存済み: " + finished + "/" + total
+                    + " （30秒ごと・5秒重複）");
+        }
+        @Override public void onFinished(List<NoteEvent> merged) {
+            working = false;
+            comparison.reset();
+            notes.clear();
+            notes.addAll(merged);
+            page = 0;
+            filter = null;
+            refresh();
+            message("採譜完了: " + notes.size() + "音符。全区間を統合して保存しました");
+        }
+        @Override public void onPaused(int finished, int total) {
+            working = false;
+            refresh();
+            message("採譜を一時停止しました（" + finished + "/" + total
+                    + "区間保存済み）。「この曲を採譜」で続きから再開できます");
+        }
+        @Override public void onFailed(String reason) {
+            working = false;
+            refresh();
+            message("採譜失敗: " + reason + "。完了済み区間は保存されています");
+        }
+    };
     private Button comparePlayButton, compareStopButton, originalMuteButton, midiMuteButton;
     private SeekBar compareSeekBar, originalVolumeSeek, midiVolumeSeek;
     private TextView compareTime, compareStatus, originalVolumeLabel, midiVolumeLabel;
@@ -89,9 +131,18 @@ public final class MainActivity extends Activity {
         midiVolume=getPreferences(0).getInt("midi_volume",100);
         loadProject();
         buildUi();
-        refresh();
+        ChunkedTranscription.attach(transcriptionListener);
+        if (ChunkedTranscription.isRunning()) {
+            // Reconnect to an in-process worker after Activity recreation.
+            modelReady = modelFile.isFile();
+            working = true;
+            refresh();
+            updateBusy("バックグラウンドの採譜処理に再接続中…");
+        } else {
+            refresh();
+            prepareBundledModel();
+        }
         applyComparisonVolumes();
-        prepareBundledModel();
         ui.postDelayed(compareTicker,250);
     }
     private int dp(float amount){return (int)(getResources().getDisplayMetrics().density*amount+.5f);}
@@ -113,7 +164,15 @@ public final class MainActivity extends Activity {
                 new LinearLayout.LayoutParams(-1,dp(55)));
         audioText=text("",13);root.addView(audioText);
         modelText=text("",13);root.addView(modelText);
-        analyzeButton=button("この曲を採譜",this::analyze);root.addView(analyzeButton,new LinearLayout.LayoutParams(-1,dp(55)));
+        analyzeButton=button("この曲を採譜",this::analyze);
+        root.addView(analyzeButton,new LinearLayout.LayoutParams(-1,dp(55)));
+        LinearLayout jobActions=row(root);
+        pauseTranscriptionButton=button("保存して一時停止",()->{
+            if(ChunkedTranscription.isRunning())ChunkedTranscription.requestPause();
+        });
+        restartTranscriptionButton=button("最初から採譜",this::restartTranscription);
+        put(jobActions,pauseTranscriptionButton);
+        put(jobActions,restartTranscriptionButton);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
         progress.setIndeterminate(true);progress.setVisibility(View.GONE);root.addView(progress);
         statusText=text("",13);root.addView(statusText);
@@ -166,14 +225,44 @@ public final class MainActivity extends Activity {
         if(result!=RESULT_OK||intent==null||intent.getData()==null)return;
         Uri uri=intent.getData();
         if(request==PICK_MP3){
-            comparison.reset();
-            audioUri=uri;audioName=fileName(uri);
-            notes.clear();page=0;filter=null;saveProject();
-            try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
-            getPreferences(0).edit().putString("audio",uri.toString()).putString("name",audioName).apply();
-            refresh();
+            if(ChunkedTranscription.isRunning()){
+                message("採譜中は音源を変更できません。区間終了後に一時停止してください");
+                return;
+            }
+            if(audioUri!=null && uri.equals(audioUri)){
+                // Do not discard the last committed checkpoint for the same song.
+                message("同じ音源を選択しました。保存済みの続きから採譜できます");
+                return;
+            }
+            if(ChunkedTranscription.hasCheckpoint(this)){
+                new AlertDialog.Builder(this)
+                    .setTitle("保存済み採譜データ")
+                    .setMessage("別の曲に変更すると、前の曲の途中経過を破棄します。続けますか？")
+                    .setPositiveButton("破棄して変更",(d,w)->{
+                        try{
+                            ChunkedTranscription.discardCheckpoint(this);
+                            useAudio(uri);
+                        }catch(Exception e){message(e.getMessage());}
+                    })
+                    .setNegativeButton("取消",null).show();
+            } else {
+                useAudio(uri);
+            }
         } else if(request==EXPORT){exportFile(uri);}
     }
+    private void useAudio(Uri uri){
+        comparison.reset();
+        audioUri=uri;audioName=fileName(uri);
+        notes.clear();page=0;filter=null;saveProject();
+        try{
+            getContentResolver().takePersistableUriPermission(uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }catch(Exception ignored){}
+        getPreferences(0).edit().putString("audio",uri.toString())
+                .putString("name",audioName).apply();
+        refresh();
+    }
+
     private String fileName(Uri uri){
         try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){
             if(c!=null&&c.moveToFirst())return c.getString(0);
@@ -196,6 +285,7 @@ public final class MainActivity extends Activity {
                     modelError=null;
                     working=false;
                     refresh();
+                    resumePendingJob();
                 });
             }catch(Exception e){
                 final String detail=e.getMessage()==null?e.toString():e.getMessage();
@@ -211,29 +301,77 @@ public final class MainActivity extends Activity {
     }
 
     private void analyze(){
-        if(working)return;
+        if(working || ChunkedTranscription.isRunning())return;
         if(audioUri==null){message("MP3を選択してください");return;}
-        if(!modelReady || !modelFile.isFile()){message(modelError==null?"内包モデルを準備しています":("モデル初期化エラー: "+modelError));return;}
-        working=true;updateBusy("音声を端末内でデコード中…");
-        jobs.execute(()->{
-            try{
-                float[] audio=AudioDecoder.decode(this,audioUri);
-                ui.post(()->updateBusy("MuScriptorで採譜中…（端末性能によって長時間かかります）"));
-                String json=NativeBridge.nativeAnalyze(modelFile.getAbsolutePath(),audio,AudioDecoder.SAMPLE_RATE,2000);
-                List<NoteEvent> recognized=TranscriptionParser.parse(json);
-                if(recognized.isEmpty())throw new IllegalStateException("音符が検出されませんでした");
-                ui.post(()->{
-                    comparison.reset();
-                    notes.clear();notes.addAll(recognized);page=0;filter=null;
-                    saveProject();refresh();message(notes.size()+"音符を検出しました");
-                });
-            }catch(Throwable t){ui.post(()->message("採譜失敗: "+t.getMessage()));}
-            finally{ui.post(()->{working=false;refresh();});}
-        });
+        if(!modelReady || !modelFile.isFile()){
+            message(modelError==null?"内包モデルを準備しています":"モデル初期化エラー: "+modelError);
+            return;
+        }
+        try{
+            working=true;
+            progress.setIndeterminate(true);
+            comparison.reset();
+            updateBusy("音声デコード中…");
+            if(!ChunkedTranscription.start(getApplicationContext(),
+                    audioUri,modelFile,transcriptionListener)){
+                message("別の採譜処理を実行中です");
+            }
+        }catch(Exception e){
+            working=false;
+            refresh();
+            message("採譜を開始できません: "+e.getMessage());
+        }
     }
+
+    /** Automatically resume the last committed window after model verification. */
+    private void resumePendingJob(){
+        if(!ChunkedTranscription.hasCheckpoint(this) || ChunkedTranscription.isRunning())return;
+        try{
+            ChunkedTranscription.Partial partial=ChunkedTranscription.readPartial(this);
+            if(partial==null)return;
+            if(audioUri==null || !partial.sourceUri.equals(audioUri.toString())){
+                message("別の音源の採譜途中データがあります。音源を確認してください");
+                return;
+            }
+            notes.clear();
+            notes.addAll(partial.notes);
+            comparison.reset();
+            refresh();
+            analyze();
+        }catch(Exception e){
+            message("途中データの読み込みに失敗しました: "+e.getMessage()
+                    +"。「最初から採譜」で破棄できます");
+        }
+    }
+
+    private void restartTranscription(){
+        if(working || ChunkedTranscription.isRunning()){
+            message("採譜処理中です。まず「保存して一時停止」を押してください");
+            return;
+        }
+        if(audioUri==null){message("MP3を選択してください");return;}
+        new AlertDialog.Builder(this).setTitle("最初から採譜")
+            .setMessage("保存済みの途中経過を破棄し、最初の区間から採譜し直しますか？")
+            .setPositiveButton("やり直す",(d,w)->{
+                try{
+                    ChunkedTranscription.discardCheckpoint(this);
+                    notes.clear();
+                    saveProject();
+                    analyze();
+                }catch(Exception e){message("やり直しに失敗: "+e.getMessage());}
+            })
+            .setNegativeButton("取消",null).show();
+    }
+
     private void updateBusy(String detail){
         statusText.setText(detail);progress.setVisibility(working?View.VISIBLE:View.GONE);
         analyzeButton.setEnabled(!working && modelReady && audioUri!=null);
+        if(pauseTranscriptionButton!=null){
+            pauseTranscriptionButton.setEnabled(ChunkedTranscription.isRunning());
+        }
+        if(restartTranscriptionButton!=null){
+            restartTranscriptionButton.setEnabled(!working && audioUri!=null);
+        }
     }
     private void refresh(){
         String engine;
@@ -277,6 +415,9 @@ public final class MainActivity extends Activity {
          }).setNegativeButton("取消",null).show();
     }
     private void editNote(NoteEvent n){
+        if(working || ChunkedTranscription.hasCheckpoint(this)){
+            message("途中経過の音符編集は採譜完了後に行ってください");return;
+        }
         LinearLayout form=vertical();form.setPadding(dp(18),0,dp(18),0);
         EditText pitch=new EditText(this);pitch.setInputType(2);pitch.setText(String.valueOf(n.pitch));
         EditText start=new EditText(this);start.setInputType(android.text.InputType.TYPE_CLASS_NUMBER|android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);start.setText(String.format(Locale.US,"%.3f",n.startSeconds));
@@ -392,6 +533,9 @@ public final class MainActivity extends Activity {
     }
 
     private void toggleComparisonPlayback(){
+        if(working || ChunkedTranscription.isRunning()){
+            message("採譜中の比較再生は完了後に行ってください");return;
+        }
         if(audioUri==null){message("原盤となる音声を選択してください");return;}
         List<NoteEvent> selected=visibleNotes();
         if(selected.isEmpty()){message("比較するMIDI音符がありません");return;}
@@ -508,6 +652,7 @@ public final class MainActivity extends Activity {
         super.onPause();
     }
     @Override protected void onDestroy(){
+        ChunkedTranscription.detach(transcriptionListener);
         ui.removeCallbacks(compareTicker);
         if(comparison!=null)comparison.reset();
         jobs.shutdown();
